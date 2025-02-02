@@ -1,0 +1,237 @@
+---
+format: 
+  pdf:
+    include-in-header: 
+      text: |
+        \usepackage{scrlayer-scrpage}
+        \rohead{Replicating GECO-Multiplier proposed by “Taming VAE”}
+        \lofoot{}
+---
+
+## 1. Introduction
+
+Variational AutoEncoders (VAEs) have emerged as a powerful class of generative models in machine learning, particularly excelling in tasks that involve unsupervised learning and latent representation extraction. Following their introduction by Kingma and Welling (2013) [1], VAEs have been widely adopted due to their ability to encode high-dimensional data into a lower-dimensional latent space while providing a principled probabilistic interpretation. This framework enables the generation of new data samples by sampling from the learned latent distribution, thus offering applications in data compression, feature extraction, and data generation [2]. 
+
+In recent years, there has been growing interest in leveraging VAEs for causal inference tasks, where the goal is to estimate the causal effect of interventions from observational data [3]. In medical imaging specifically, VAEs show particular promise for causal inference by learning disentangled representations that can help identify underlying factors of variation in medical data. [4]. This capability makes them valuable tools for understanding disease progression, treatment effects, and biological mechanisms. Their ability to model complex probability distributions while maintaining tractable inference has led to successful applications in medical image synthesis, anomaly detection, and discovering latent disease factors.
+
+While VAEs offer significant promise for causal inference which is an attractive proposition for the adoption of machine learning techniques in clinical practice, training robust VAE models remain challenging due to several fundamental limitations. As highlighted by Rezende and Viola in their work "Taming VAEs”, VAE models struggle with optimization and generalisation [8]. One key challenge is the tendency of VAEs with simple diagonal Gaussian posterior approximations to ignore some latent variables (latent-collapse) and produce blurred reconstructions [8]. This is especially evident on high-resolution large images, such as medical images, where the need for high-fidelity counter factual images is necessary for making inferences.
+
+Current methods for improving VAEs in causal inference often use ad-hoc techniques, such as gradually increasing the weight of the KL divergence term in the loss function during training (known as KL term annealing) [13, 14]. This process is typically done by hand, requiring the researcher to manually adjust the annealing schedule based on their intuition or trial and error. However, these manual approaches lack consistency and reliability when applied to different VAE architectures or datasets, as the optimal annealing schedule may vary depending on the specific characteristics of the model and data. As a result, the performance of these heuristic solutions can be inconsistent and may not generalize well to new problems or settings.
+
+In this paper, I aim to replicate the technique proposed by Rezende and Viola proposed in their paper “Taming VAEs” [8]. Their research introduces the Generalized ELBO with Constrained Optimization (GECO) algorithm as a principled approach to balance reconstruction accuracy and latent space compression [8]. Unlike previous methods that require careful tuning of abstract hyperparameters, GECO provides an intuitive framework where constraints can be directly specified in terms of desired model performance metrics. In replicating this work, I aim to explore the strengths and weakness of the approach to assess its feasibility as a foundation for causal inference in high-resolution medical images.
+
+
+## 2. Methodology
+
+The GECO algorithm introduced by Rezende et al. builds upon Variational Autoencoders  and it’s extension $\beta$-VAE. As such, in this section, I first introduce the mathematical formulation for based Variational Encoders and their  extension and then move on to the GECO algorithm approach that is the object of this paper.
+
+
+### 2.1. Variational AutoEncoders
+
+A Variational Autoencoder (VAE) is a type of generative model that learns to represent data in a compressed form, known as the latent space. The goal is to encode input data $x$ into a latent variable $z$ and then decode it back to reconstruct the original data. The model consists of two main parts: an encoder $(q_{\phi}(z|x))$ and a decoder $(p_{\theta}(x|z)$.
+
+The optimization problem for a VAE involves maximizing the Evidence Lower Bound (ELBO), which is given by [9, 11]:
+
+$$
+L(\theta, \phi, x^i) = D_{KL}(q_{\phi}(z|x^{(i)})\|p(z)) + \mathbb{E}_{q_{\phi}(z|x^{(i)})}(\log p_{\theta}(x^{(i)}|z)),
+$$
+Here, $(D_{KL})$  represents the Kullback-Leibler (KL) divergence, which measures how one probability distribution (in this case, the encoder's output $(q_{\phi}(z|x))$ ) differs from a reference distribution (the latent distribution $p(z)$ ). The term $\mathbb{E}_{q_{\phi}(z|x^{(i)})}(\log p_{\theta}(x^{(i)}|z)$  is the expected log-likelihood of the data given the latent variable, which encourages the model to reconstruct the input data accurately.
+
+
+### 2.2. $\beta$-VAE
+
+Beta-VAEs were introduced by Higgins et al. as a type of variational Autoencoder that seek to discover disentangled latent factors [6]. As an extension to the standard, the $\beta$ parameter controls the trade-off between the KL divergence and the reconstruction accuracy [6]. When $\beta=1$ , the standard VAE model is observed. The mathematical formulation simply adds the beta parameter to the objective function as noted below:
+
+$$
+L(\theta, \phi, x^i) = -\beta D_{KL}(q_{\phi}(z|x^{(i)})\|p(z)) + \mathbb{E}_{q_{\phi}(z|x^{(i)})}(\log p_{\theta}(x^{(i)}|z))
+$$
+
+
+By varying $\beta$ , we can influence how much the model prioritizes learning a compact latent representation (high $\beta$ ) versus accurately reconstructing the input data (low $\beta$ ).
+
+### 2.3. Generalized Evidence Lower Bound with Constrained Optimization (GECO)
+
+GECO is a more advanced approach that treats $\beta$  as a trainable parameter rather than a fixed value. This method reformulates the ELBO maximization problem as a conditional minimization problem. The goal is to find the minimal possible KL divergence for a given value of the reconstruction loss.
+
+The Lagrangian for this problem is:
+
+$$KL(q(z|x)\|p(z)) + \lambda^T\mathbb{E}_{q(z|x)}(Re(x, g(z)) \to \text{min},
+$$
+
+where $Re(x, g(z))$ is the reconstruction loss, typically computed as the squared difference between the input and its reconstruction $g(z)$ minus a tolerance level $\kappa^2$.
+
+In GECO, the parameter $\lambda$ is adjusted interactively. Initially, when the reconstruction is poor,  $\lambda$ increases to prioritize improving the reconstruction. Once the reconstruction meets a predefined tolerance level, $\lambda$  decreases, allowing the model to focus more on minimizing the KL divergence. This dynamic adjustment helps balance the trade-off between accurate reconstruction and a compact latent representation, leading to more efficient and effective model training.
+
+
+## 3. Data Set, Model Architecture and Training
+
+In the following section, I discuss the dataset, the model architecture leveraged in replicating "Taming VAEs", and outline some details training protocol used to achieve the replication on this paper.
+
+
+### 3.1 Data Set
+
+The “Taming VAE” paper used two standard datasets, CIFAR10 and MNIST, to demonstrate the GECO approach. To replicate the algorithm, I use the MNIST dataset for both it’s computational ease and direct reproducibility. MNIST dataset, which consists of 70,000 handwritten digit images (28×28 pixels in grayscale). MNIST is conventionally split into 60,000 training images and 10,000 test images, although a further subdivision of the training set is often used to form a validation set for model selection. Each digit (0–9) is well-represented, offering a balanced classification challenge and a standard benchmark for generative models such as VAEs. We preprocess each 28×28 image into a single 784-dimensional vector (by flattening), then normalize the pixel values into the range [0,1] when feeding them into the network.
+
+### 3.2 Model Architecture - VAE
+
+The foundation of the GECO algorithm is the Variational Autoencoder (VAE) with a feedforward encoder and decoder. The architecture for this paper contains an encoder that reduces 784-dimensional input features through two dense layers (of sizes 512 and 256) to produce a latent distribution. 
+
+Specifically, it outputs both:
+
+*   $\mu_{z}$ the latent mean and, 
+*   $log(\sigma_{z})$, the log of the latent standard deviation 
+
+each of size 200 (the latent dimenstionality). A random sample $z$ is then drawn from this Gaussian distribution. The decoder mirrors this process, taking the 200-dimensional latent vector and mapping it back to a representation that can be used to reconstruct the original 28×28 input. 
+
+Finally, the reconstruction mean $\mu_{x}$ and the reconstruction log-standard-deviation $log(\sigma_{x})$, both of dimenion 784 are generated, which are then reshaped into 28x28 for evaluation and visualization.
+
+
+### 3.3 Model Architecture - GECO Implementation
+
+Building on the VAE framework, the GECO approach automatically adapts a Lagrange multiplier $\lambda$ to maintain reconstruction quality near a chosen threshold, rather than relying on a fixed $\beta$ coefficient. Below, I detail the modification and implementation of GECO-based VAE. 
+
+
+### 3.3.1  Loss Function and Optimization - Adaptive Lagrange Multiplier
+
+Rather than optimizing the standard evidence lower bound (ELBO) directly, GECO's approach incorporates a constraint on the reconstruction error using the lagrange multiplie, $\lambda$.The overall loss function is therefore given as [10, 15]:
+
+$${L} = \underbrace{\mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}\left[ -\log p_\theta(\mathbf{x}|\mathbf{z}) \right]}_{\text{Reconstruction Error}} + \underbrace{\operatorname{D_{KL}}\left(q_\phi(\mathbf{z}|\mathbf{x}) \,\|\, p(\mathbf{z})\right)}_{\text{KL Divergence}} + \lambda \cdot \underbrace{\left( \mathbb{E}[RE(\mathbf{x}, \hat{\mathbf{x}})] - \text{tol} \right)}_{\text{Constraint}},
+$$
+
+where:
+
+* The KL Divergence between the approximate $q_{\phi}(z|x)$ and the prior $p(z) = \mathcal{N} (0,1)$ is computed as [10, 15]: 
+
+$$D_{\mathrm{KL}}(q_{\phi}(z \mid x) \;\Vert\; p(z)) = \frac{1}{2}\sum_{i=1}^{d_z} \Big(\exp(\log\sigma_{z,i}) + \mu_{z,i}^2 - 1 - \log\sigma_{z,i}\Big)$$
+
+* The reconstruction error metric is given by term $RE(x,\hat x)$
+
+* The Lagrange multiplier $\lambda$ is adaptively updated during training to enforce that the average reconstruction error does not fall below the desired tolerance. 
+
+* $tol$ is a tolerance user defined tolerance.
+
+### 3.4 Training Protocol Summary
+
+To replicate this work, I leverage Pytorch to implement a deep learning architecture and training protocol. The steps for the training are outlined below:
+
+### 3.4.1 Mini-batch Processing
+
+For each mini-batch from the training dataset, the input images are first flattened to vectors of size 784. The forward pass of the VAE yields the reconstruction parameters $\hat x_{\mu}$ and $\hat x_{log \sigma}$ as well as the latent parameters $\mu$ and log $\sigma$.
+
+### 3.4.2 Loss Computation
+
+The reconstruction loss and KL divergence are computeted and the overall loss is calculated as:
+$$loss = D_{KL} + \lambda \cdot \text{Constraint} $$
+
+### 3.4.3 Backward Pass and Optimization
+
+The gradients are computed using backpropagation, and the model parameters are updated using the optimizer. In particular, I used Adam Optimizer with a learning rate $1e-3$. Furthermore, I implement a learning rate scheduling to adjust the learning rate based on the validation loss. If the validation loss does not improve for 10 epochs, the learning rate is reduced. This helps in fine-tuning the model and preventing overfitting.
+
+
+### 3.4.4 $\lambda$ Parameter Adjustment
+
+The weight $\lambda$ is adjusted based on the moving average of the reconstruction constraint value computed at each batch.
+
+
+## 4. Model Experimentation and Results
+
+The overall implementation of the GECO-VAE spanned over 200 epochs and the performance is evaluated using the training and test datasets.  The results of the optimization process are visualized in Figure 1, which includes four key metrics: Total Loss, Reconstruction Error, KL Divergence, and Lambda (Lagrange Multiplier).
+
+![GECO Model Metrics on MNIST Data](MNIST-Experiments.png){width=100%}
+
+### 4.1 Total Loss
+
+The loss shows an initial sharp decrease within the first 20 epochs, indicating rapid improvement in the model’s performance. After this point, the loss continues to decrease at a slower rate, eventually stabilizing around epoch 100. Interestingly, while both the training and test losses exhibit a similar trend, the test loss remains consistently lower than the training loss. This suggests that the model generalizes well to unseen data and does not exhibit signs of severe overfitting.
+
+### 4.2 Reconstruction Error
+
+The reconstruction error follows a similar trend to the total loss. Both the training and test errors experience a steep decline within the first 20 epochs, followed by a stabilization phase. The constraint imposed by the GECO method effectively ensures that the reconstruction error is controlled throughout the training process. The final values of the reconstruction loss remain close to zero, indicating that the VAE successfully learns to reconstruct input images while maintaining latent space regularization.
+
+### 4.4 KL Divergence
+
+The KL divergence initially exhibits an unexpected increase before gradually decreasing and stabilizing. The peak at the early stages of training suggests that the network initially prioritizes reconstructing the input over enforcing latent space regularization. As training progresses, the constraint mechanism shifts focus towards ensuring an optimal balance between the two objectives. The final KL divergence values hover around 10-12, suggesting that the model maintains a meaningful latent space structure.
+
+It is also notable that the KL divergence remains nearly identical for both the training and test datasets, further supporting the notion that the learned latent representations may generalize well.
+
+### 4.5 Lagrange Multiplier: $(\lambda)$
+
+The evolution of the Lagrange multiplier $\lambda$ provides insight into how the constraint is enforced during training. Initially, $\lambda$ increases sharply, reaching a peak around epoch 10 before gradually decreasing and stabilizing. This behavior is expected as the model initially requires a higher weighting on the reconstruction constraint to meet the specified tolerance level. Once the reconstruction error stabilizes, $\lambda$ decreases, allowing the network to balance the trade-off between reconstruction quality and latent space regularization.
+
+
+## 5. Experiment Interpretaion and Challenges.
+
+The results of the replication confirm the objectives of the GECO techniques in improving the balance between latent space and reconstruction objectives. Specifically,  
+
+* The convergence behavior of the total loss and reconstruction error suggests that the GECO-VAE effectively balances the trade-off between reconstruction fidelity and latent space regularization.
+* The adaptive Lagrange multiplier mechanism successfully enforces the reconstruction constraint early in training, before gradually reducing its influence as the model converges.
+* The consistent trends across training and test datasets indicate robust generalization and minimal overfitting.
+
+### 5.1. Observed Limitation - High Lagrage Multiplier 
+
+The Lagrange multiplier $\lambda$ exhibits an unintended amplification effect, where its rapid increase is triggered by the initially high reconstruction loss at the beginning of training. As the reconstruction loss stabilizes, $\lambda$ remains excessively large, leading to a higher-than-expected KL divergence. This imbalance suggests that the trade-off between reconstruction fidelity and latent space regularization is skewed due to an overcompensating update in 
+$lambda$ which ultimately affects the quality of the learned latent representations.
+
+To mitigate the overcompensation issue of $\lambda$, exercising judgment in fixing its initial value at a lower level or limiting its rate of increase may improve parameter tuning. One approach is to introduce a hard cap on $\lambda$ to prevent excessive growth during the early epochs, ensuring a more controlled adaptation to the reconstruction constraint. Additionally, implementing a slower update schedule, such as a smoother exponential decay rather than direct multiplicative updates, could help regulate $\lambda$ more effectively. Adjusting the constraint moving average (EMA) smoothing factor may also be beneficial, as it would reduce the impact of short-term fluctuations in reconstruction loss and provide a more stable optimization trajectory.
+
+### 5.2. Model Reconstruction - Visual Inspection
+
+Broadly the model performs significantly well in reconstructing digits. In particular, legible digits are more likely to be reconstructed accurately. However, illegible digits such as number 5 (second to last digit in Figure 2) can still contain blurred reconstruction that may change the actual classification of the digit (from number 5 to 6).
+
+
+![GECO MNIST Reconstruction Results](GECO-MNIST-Reconstruction.png){width=100%}
+
+
+![Expanded Example of Reconstruction](Reconstruction II.png){width=100%} 
+
+
+## 6. Conclusion
+
+In this paper, I successfully replicated the GECO-VAE technique proposed by Rezende and Viola in their paper "Taming VAEs" and evaluated its effectiveness in improving the training of Variational Autoencoders (VAEs) for inference tasks. The results confirm that GECO-VAEs addresses the fundamental challenge of balancing reconstruction accuracy and latent space regularization in VAEs.
+
+The experiments demonstrate that GECO effectively adapts the Lagrange multiplier to enforce the reconstruction constraint during the early stages of training, ensuring that the model prioritizes accurate reconstruction of the input data. As training progresses and the reconstruction error stabilizes, GECO gradually reduces the influence of the constraint, allowing the model to find an optimal trade-off between reconstruction fidelity and latent space compression.
+
+However, the replication study also highlights some limitations and challenges associated with the GECO technique. The rapid increase of the Lagrange multiplier during the early epochs can lead to an overcompensation effect, resulting in a higher-than-expected KL divergence. This imbalance suggests that the trade-off between reconstruction accuracy and latent space regularization may be skewed, potentially affecting the quality of the learned representations. To mitigate this issue, I propose strategies, such as setting a lower initial value for the Lagrange multiplier, introducing a hard cap on its growth, implementing a slower update schedule, and adjusting the constraint moving average smoothing factor. These modifications aim to provide a more controlled adaptation to the reconstruction constraint and ensure a more stable optimization trajectory.
+
+Furthermore, a visual inspection of the reconstructed digits reveals that while the model performs well in reconstructing legible digits, it may struggle with illegible or ambiguous inputs. This highlights the need for further research on improving the robustness of VAEs in handling noisy or challenging data.
+
+In conclusion, this replication study validates the effectiveness of the GECO technique in improving the training of VAEs for causal inference tasks. By successfully reproducing the results and insights presented in "Taming VAEs,". However, the identified limitations and challenges underscore the need for continued research and refinement to address the remaining issues and further unlock the potential of VAEs in causal inference applications.
+
+## References:
+
+1. Kingma, D. and Welling, M. (2014). Auto-Encoding Variational Bayes. [online] Available at: https://arxiv.org/pdf/1312.6114.
+
+2. Doersch, C. (2016). Tutorial on variational autoencoders. arXiv preprint arXiv:1606.05908.
+
+3. Louizos, C., Shalit, U., Mooij, J. M., Sontag, D., Zemel, R., & Welling, M. (2017). Causal effect inference with deep latent-variable models. Advances in neural information processing systems, 30.
+
+4. Harkness, R., Frangi, A.F., Zucker, K. and Ravikumar, N. (2023). Learning disentangled representations for explainable chest X-ray classification using Dirichlet VAEs. [online] arXiv.org. Available at: https://arxiv.org/abs/2302.02979v1.
+
+5. Ladislav Rampášek, Daniel Hidru, Petr Smirnov, Benjamin Haibe-Kains, Anna Goldenberg, Dr.VAE: improving drug response prediction via modeling of drug perturbation effects, Bioinformatics, Volume 35, Issue 19, October 2019, Pages 3743–3751, https://doi.org/10.1093/bioinformatics/btz158
+
+6. Higgins, Irina, et al. “Beta-VAE: Learning Basic Visual Concepts with a Constrained Variational Framework.” International Conference on Learning Representations, 24 Apr. 2017.
+
+7. Karol Gregor, Frederic Besse, Danilo Jimenez Rezende, Ivo Danihelka, and Daan Wierstra.
+Towards conceptual compression. In NIPS, 2016.
+
+8. Rezende, Danilo Jimenez, and Fabio Viola. “Taming VAEs.” ArXiv.org, 2018, arxiv.org/abs/1810.00597. Accessed 1 Feb. 2025.
+
+9. Griffiths, Ryan-Rhys, et al. “Auto-Encoding Variational Bayes Problem Setting.” University of Cambridge, 2017. 
+
+10. denproc. “GitHub - Denproc/Taming-VAEs.” GitHub, 2018, github.com/denproc/Taming-VAEs/tree/master?tab=readme-ov-file. Accessed 21 Nov. 2024.
+
+11. Tomczak, Jakub M. “4_VAE.” Github.io, 2018, jmtomczak.github.io/blog/4/4_VAE.html. Accessed 13 Dec. 2024.
+
+12. Paisley, John and Blei, David and Jordan, Michael Variational Bayesian inference with stochastic search. arXiv preprint
+arXiv:1206.6430 (2012)
+
+13. Fu, Hao, et al. “Cyclical Annealing Schedule: A Simple Approach to Mitigating KL Vanishing.” ArXiv:1903.10145 [Cs, Stat], 10 June 2019, arxiv.org/abs/1903.10145.
+
+14. hubertrybka. “GitHub - Hubertrybka/Vae-Annealing: A Simple Pytorch Implementation for Calculating VAE Loss Components and Annealing KLD Loss While Training VAEs, Especially RNN-Based.” GitHub, 2023, github.com/hubertrybka/vae-annealing. Accessed 3 Dec. 2024.
+
+15. denproc. “Taming-VAEs/Report.pdf at Master · Denproc/Taming-VAEs.” GitHub, 2018, github.com/denproc/Taming-VAEs/blob/master/report.pdf. Accessed 3 Dec. 2024.
+
+
+
+
+
+
